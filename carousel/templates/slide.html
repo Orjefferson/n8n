@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1350" />
+    <title>Slide</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      :root {
+        --bg: {{bg}};
+        --accent: {{accent}};
+      }
+    </style>
+  </head>
+  <body>
+    <article class="slide {{variant}}">
+      <div class="brand">{{brand}}</div>
+      <h1 class="title">{{title}}</h1>
+      <p class="body">{{body}}</p>
+      <footer class="footer">
+        <span class="accent">{{label}}</span>
+        <span>{{footer}}</span>
+      </footer>
+    </article>
+  </body>
+</html>

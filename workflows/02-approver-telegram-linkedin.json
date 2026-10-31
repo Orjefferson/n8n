@@ -1,0 +1,1329 @@
+{
+  "id": "wf02approverlinkedin",
+  "name": "02 Approver Telegram → LinkedIn",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "telegram-approver",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "a02-hook",
+      "name": "Webhook Telegram",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "telegram-approver"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const body = $input.first().json;\nconst expectedChat = String($env.TELEGRAM_CHAT_ID || '');\nconst staticData = $getWorkflowStaticData('global');\n\nconst cq = body.callback_query;\nif (cq) {\n  const chatId = String(cq.message?.chat?.id ?? '');\n  const data = String(cq.data || '');\n  const [action, draftId] = data.split(':');\n  return [{\n    json: {\n      kind: 'callback',\n      okChat: chatId === expectedChat,\n      chatId,\n      action: action || '',\n      draftId: draftId || '',\n      callbackQueryId: cq.id,\n      messageId: cq.message?.message_id,\n      text: '',\n    },\n  }];\n}\n\nconst msg = body.message;\nif (msg && msg.text && !msg.text.startsWith('/')) {\n  const chatId = String(msg.chat?.id ?? '');\n  const draftId = staticData.pendingRevisionDraftId || '';\n  return [{\n    json: {\n      kind: 'revision_text',\n      okChat: chatId === expectedChat,\n      chatId,\n      action: 'apply_revision',\n      draftId,\n      callbackQueryId: '',\n      messageId: msg.message_id,\n      text: msg.text,\n    },\n  }];\n}\n\nreturn [{\n  json: {\n    kind: 'ignore',\n    okChat: false,\n    chatId: '',\n    action: '',\n    draftId: '',\n    callbackQueryId: '',\n    messageId: null,\n    text: '',\n  },\n}];\n"
+      },
+      "id": "a02-parse",
+      "name": "Parse update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a02-okchat",
+              "leftValue": "={{ $json.okChat }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a02-if-chat",
+      "name": "Chat autorizado",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a02-has-draft",
+              "leftValue": "={{ $json.draftId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a02-if-draft",
+      "name": "Tem draftId",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        720,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.CAROUSEL_URL || 'http://carousel:3000') + '/drafts/' + $json.draftId }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a02-load",
+      "name": "Load draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const update = $('Parse update').first().json;\nconst draft = $input.first().json;\n\nif (draft.error) {\n  return [{ json: { ...update, abort: true, abortReason: draft.error } }];\n}\n\nconst status = draft.status || 'pending';\nconst revisionCount = Number(draft.revisionCount || 0);\nlet abort = false;\nlet abortReason = '';\n\nif (update.kind === 'callback') {\n  if (!['approve', 'reject', 'revise'].includes(update.action)) {\n    abort = true;\n    abortReason = 'ação desconhecida';\n  } else if (status === 'published' || status === 'rejected') {\n    abort = true;\n    abortReason = 'draft já finalizado (' + status + ')';\n  } else if (status !== 'pending' && status !== 'pending_revision') {\n    abort = true;\n    abortReason = 'status inválido: ' + status;\n  }\n}\n\nif (update.kind === 'revision_text') {\n  if (!update.draftId) {\n    abort = true;\n    abortReason = 'nenhum ajuste pendente';\n  } else if (status !== 'pending_revision') {\n    abort = true;\n    abortReason = 'draft não está à espera de ajuste';\n  } else if (revisionCount >= 3) {\n    abort = true;\n    abortReason = 'limite de 3 revisões atingido';\n  }\n}\n\nreturn [{\n  json: {\n    ...update,\n    abort,\n    abortReason,\n    draft,\n    revisionCount,\n  },\n}];\n"
+      },
+      "id": "a02-validate",
+      "name": "Validar draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a02-abort",
+              "leftValue": "={{ $json.abort }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a02-if-abort",
+      "name": "Deve abortar",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1440,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "a02-has-cb",
+              "leftValue": "={{ $json.callbackQueryId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a02-ack-abort-if",
+      "name": "Tem callback abort",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/answerCallbackQuery' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  callback_query_id: $json.callbackQueryId,\n  text: $json.abortReason || 'Ignorado',\n  show_alert: false\n}) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-ack-abort",
+      "name": "Ack abort",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1920,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "approve",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "approve"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "reject",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reject"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "revise",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "revise"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "apply_revision",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "apply_revision"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "none"
+        }
+      },
+      "id": "a02-switch",
+      "name": "Switch ação",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1680,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/answerCallbackQuery' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $json.callbackQueryId, text: 'Rejeitado' }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-reject-ack",
+      "name": "Ack reject",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1960,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ ($env.CAROUSEL_URL || 'http://carousel:3000') + '/drafts/' + $('Switch ação').item.json.draftId }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"rejected\", pendingRevision: false }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-reject-patch",
+      "name": "Marcar rejected",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2220,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\ndelete staticData.pendingRevisionDraftId;\nreturn [$input.first()];\n"
+      },
+      "id": "a02-reject-clear",
+      "name": "Clear pending reject",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/sendMessage' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chat_id: $env.TELEGRAM_CHAT_ID,\n  text: '❌ Rascunho ' + $('Switch ação').item.json.draftId + ' rejeitado. Nada será publicado.'\n}) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-reject-msg",
+      "name": "Confirmar reject",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2740,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/answerCallbackQuery' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $json.callbackQueryId, text: 'Envie o ajuste' }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-revise-ack",
+      "name": "Ack revise",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1960,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ ($env.CAROUSEL_URL || 'http://carousel:3000') + '/drafts/' + $('Switch ação').item.json.draftId }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"pending_revision\", pendingRevision: true }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-revise-patch",
+      "name": "Marcar pending_revision",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2220,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst draftId = $('Switch ação').first().json.draftId;\nstaticData.pendingRevisionDraftId = draftId;\nreturn [{ json: { draftId } }];\n"
+      },
+      "id": "a02-revise-set",
+      "name": "Set pending revision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/sendMessage' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chat_id: $env.TELEGRAM_CHAT_ID,\n  text: '✏️ O que devo ajustar no rascunho ' + $('Switch ação').item.json.draftId + '? Responda com o texto do ajuste (revisão ' + (($('Validar draft').item.json.revisionCount || 0) + 1) + '/3).',\n  reply_markup: { force_reply: true }\n}) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-revise-ask",
+      "name": "Pedir ajuste",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2740,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const item = $input.first().json;\nconst draft = item.draft;\nconst instruction = item.text;\n\nconst prompt = [\n  'Rascunho atual:',\n  JSON.stringify({\n    hook: draft.hook,\n    post_text: draft.post_text,\n    hashtags: draft.hashtags,\n    carousel_slides: draft.carousel_slides,\n    sources: draft.sources,\n  }, null, 2),\n  '',\n  'Instruções de ajuste do autor:',\n  instruction,\n].join('\\n');\n\nreturn [{\n  json: {\n    ...item,\n    prompt,\n  },\n}];\n"
+      },
+      "id": "a02-rev-prompt",
+      "name": "Montar prompt revisão",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  systemInstruction: { parts: [{ text: \"És um ghostwriter de LinkedIn para Product Managers e Tech Leads no Brasil. Recebes um rascunho JSON e instruções de ajuste do autor. Aplica os ajustes sem inventar factos. Mantém PT-BR, tom direto, sem markdown. Se necessário, regenera o carrossel (5–8 slides) coerente com o novo texto. Responde SOMENTE com JSON no mesmo schema do rascunho.\" }] },\n  contents: [{ role: 'user', parts: [{ text: $json.prompt }] }],\n  generationConfig: {\n    temperature: 0.4,\n    maxOutputTokens: 8192,\n    responseMimeType: 'application/json'\n  }\n}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "a02-rev-gemini",
+      "name": "Gemini revisão",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2220,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $input.first().json;\nconst prev = $('Montar prompt revisão').first().json;\n\nif (response?.promptFeedback?.blockReason) {\n  throw new Error('Pedido bloqueado pelo Gemini: ' + response.promptFeedback.blockReason);\n}\n\nconst parts = response?.candidates?.[0]?.content?.parts ?? [];\nconst text = parts.map((part) => part.text || '').join('').trim();\nif (!text) throw new Error('Resposta vazia do Gemini na revisão.');\n\nlet parsed;\ntry {\n  const fence = String.fromCharCode(96, 96, 96);\n  const cleaned = text\n    .replace(new RegExp('^' + fence + 'json\\\\\\\\s*', 'i'), '')\n    .replace(new RegExp('^' + fence + '\\\\\\\\s*', 'i'), '')\n    .replace(new RegExp('\\\\\\\\s*' + fence + '$', 'i'), '')\n    .trim();\n  parsed = JSON.parse(cleaned);\n} catch (error) {\n  throw new Error('JSON de revisão inválido: ' + error.message);\n}\n\nconst slides = Array.isArray(parsed.carousel_slides) ? parsed.carousel_slides.slice(0, 8) : [];\nconst hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags : [];\nlet postText = String(parsed.post_text || '').trim();\nif (!postText || slides.length < 3) throw new Error('Revisão incompleta.');\n\nif (hashtags.length && !hashtags.some((tag) => postText.includes(tag))) {\n  postText = postText + '\\n\\n' + hashtags.join(' ');\n}\n\nconst draftId = prev.draftId;\nconst revisionCount = Number(prev.revisionCount || 0) + 1;\n\nreturn [{\n  json: {\n    draftId,\n    status: 'pending',\n    revisionCount,\n    pendingRevision: false,\n    hook: parsed.hook || '',\n    post_text: postText,\n    hashtags,\n    carousel_slides: slides,\n    sources: Array.isArray(parsed.sources) ? parsed.sources : prev.draft.sources,\n    links: prev.draft.links || [],\n    count: prev.draft.count || 0,\n  },\n}];\n"
+      },
+      "id": "a02-rev-parse",
+      "name": "Parse revisão",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ ($env.CAROUSEL_URL || 'http://carousel:3000') + '/drafts/' + $json.draftId }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-rev-save",
+      "name": "Salvar revisão",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2740,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\ndelete staticData.pendingRevisionDraftId;\nreturn [$input.first()];\n"
+      },
+      "id": "a02-rev-clear",
+      "name": "Clear pending after rev",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const draft = $input.first().json;\nconst draftId = draft.draftId;\nlet message = '✏️ Rascunho ajustado (' + draftId + ') — revisão ' + draft.revisionCount + '/3\\n\\n' + draft.post_text;\nif (message.length > 3900) message = message.slice(0, 3884) + '\\n\\n[truncado]';\n\nreturn [{\n  json: {\n    ...draft,\n    message,\n    reply_markup: {\n      inline_keyboard: [[\n        { text: '✅ Aprovar', callback_data: 'approve:' + draftId },\n        { text: '❌ Rejeitar', callback_data: 'reject:' + draftId },\n        { text: '✏️ Ajustar', callback_data: 'revise:' + draftId },\n      ]],\n    },\n  },\n}];\n"
+      },
+      "id": "a02-rev-prep",
+      "name": "Preparar Telegram revisão",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3260,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/sendMessage' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chat_id: $env.TELEGRAM_CHAT_ID,\n  text: $json.message,\n  disable_web_page_preview: true,\n  reply_markup: $json.reply_markup\n}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "a02-rev-send",
+      "name": "Enviar revisão",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        620
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/answerCallbackQuery' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $json.callbackQueryId, text: 'Aprovado — a gerar carrossel' }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-appr-ack",
+      "name": "Ack approve",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1960,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const validated = $('Validar draft').first().json;\nreturn [{\n  json: {\n    draftId: validated.draftId,\n    draft: validated.draft,\n    action: validated.action,\n    callbackQueryId: validated.callbackQueryId,\n  },\n}];\n"
+      },
+      "id": "a02-appr-ctx",
+      "name": "Guardar contexto approve",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.CAROUSEL_URL || 'http://carousel:3000') + '/render' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  slides: $json.draft.carousel_slides,\n  theme: { bg: '#0B1220', accent: '#3B82F6', brand: 'Product & Tech', label: 'LinkedIn' }\n}) }}",
+        "options": {
+          "timeout": 90000,
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "carousel"
+            }
+          }
+        }
+      },
+      "id": "a02-render",
+      "name": "Gerar carrossel PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2480,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/sendDocument' }}",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ $env.TELEGRAM_CHAT_ID }}"
+            },
+            {
+              "name": "caption",
+              "value": "={{ \"Pré-visualização do carrossel — \" + $(\"Guardar contexto approve\").item.json.draftId }}"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "document",
+              "inputDataFieldName": "carousel"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "a02-preview",
+      "name": "Preview PDF Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2740,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const draft = $('Guardar contexto approve').first().json.draft;\nconst author = $env.LINKEDIN_AUTHOR_URN;\nconst token = $env.LINKEDIN_ACCESS_TOKEN;\nif (!author || !token) {\n  throw new Error('Defina LINKEDIN_AUTHOR_URN e LINKEDIN_ACCESS_TOKEN no .env');\n}\nconst binary = $('Gerar carrossel PDF').first().binary || {};\nreturn [{\n  json: {\n    draft,\n    author,\n    token,\n    initBody: {\n      initializeUploadRequest: {\n        owner: author,\n      },\n    },\n  },\n  binary,\n}];\n"
+      },
+      "id": "a02-li-prep",
+      "name": "Preparar LinkedIn init",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.linkedin.com/rest/documents?action=initializeUpload",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.token }}"
+            },
+            {
+              "name": "LinkedIn-Version",
+              "value": "202405"
+            },
+            {
+              "name": "X-Restli-Protocol-Version",
+              "value": "2.0.0"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.initBody) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "a02-li-init",
+      "name": "LinkedIn init upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3260,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const ctx = $('Preparar LinkedIn init').first().json;\nconst init = $('LinkedIn init upload').first().json;\nconst value = init.value || init;\nconst documentUrn = value.document || value.documents || value.image || null;\nconst uploadUrl = value.uploadUrl || value.uploadMechanism?.['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest']?.uploadUrl;\n\nif (!documentUrn) {\n  // Alguns tenants devolvem o URN noutro campo — tenta inferir\n  const maybe = value.id || null;\n  if (!maybe) {\n    throw new Error('LinkedIn init upload sem document URN: ' + JSON.stringify(init).slice(0, 500));\n  }\n}\n\nconst urn = documentUrn || value.id;\nconst draft = ctx.draft;\nconst commentary = String(draft.post_text || '').slice(0, 3000);\nconst binary = $('Gerar carrossel PDF').first().binary || {};\n\nreturn [{\n  json: {\n    ...ctx,\n    documentUrn: urn,\n    uploadUrl,\n    postBody: {\n      author: ctx.author,\n      commentary,\n      visibility: 'PUBLIC',\n      distribution: {\n        feedDistribution: 'MAIN_FEED',\n        targetEntities: [],\n        thirdPartyDistributionChannels: [],\n      },\n      content: {\n        media: {\n          title: draft.hook || 'Carrossel',\n          id: urn,\n        },\n      },\n      lifecycleState: 'PUBLISHED',\n      isReshareDisabledByAuthor: false,\n    },\n  },\n  binary,\n}];\n"
+      },
+      "id": "a02-li-prep-post",
+      "name": "Preparar LinkedIn post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.uploadUrl }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $json.token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/pdf"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "carousel",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "a02-li-upload",
+      "name": "LinkedIn upload PDF",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3780,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.linkedin.com/rest/posts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Preparar LinkedIn post').item.json.token }}"
+            },
+            {
+              "name": "LinkedIn-Version",
+              "value": "202405"
+            },
+            {
+              "name": "X-Restli-Protocol-Version",
+              "value": "2.0.0"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($(\"Preparar LinkedIn post\").item.json.postBody) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "a02-li-post",
+      "name": "LinkedIn criar post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4040,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ ($env.CAROUSEL_URL || 'http://carousel:3000') + '/drafts/' + $('Guardar contexto approve').item.json.draftId }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: \"published\", pendingRevision: false, linkedInResponse: $json }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-appr-done",
+      "name": "Marcar published",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4300,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\ndelete staticData.pendingRevisionDraftId;\nreturn [$input.first()];\n"
+      },
+      "id": "a02-appr-clear",
+      "name": "Clear pending approve",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4560,
+        40
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/sendMessage' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chat_id: $env.TELEGRAM_CHAT_ID,\n  text: '🚀 Publicado no LinkedIn (draft ' + $('Guardar contexto approve').item.json.draftId + ').'\n}) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "a02-appr-msg",
+      "name": "Confirmar publicação",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4820,
+        40
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Telegram": {
+      "main": [
+        [
+          {
+            "node": "Parse update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse update": {
+      "main": [
+        [
+          {
+            "node": "Chat autorizado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat autorizado": {
+      "main": [
+        [
+          {
+            "node": "Tem draftId",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Tem draftId": {
+      "main": [
+        [
+          {
+            "node": "Load draft",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Load draft": {
+      "main": [
+        [
+          {
+            "node": "Validar draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar draft": {
+      "main": [
+        [
+          {
+            "node": "Deve abortar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deve abortar": {
+      "main": [
+        [
+          {
+            "node": "Tem callback abort",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Switch ação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem callback abort": {
+      "main": [
+        [
+          {
+            "node": "Ack abort",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Switch ação": {
+      "main": [
+        [
+          {
+            "node": "Ack approve",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ack reject",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ack revise",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Montar prompt revisão",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack reject": {
+      "main": [
+        [
+          {
+            "node": "Marcar rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar rejected": {
+      "main": [
+        [
+          {
+            "node": "Clear pending reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear pending reject": {
+      "main": [
+        [
+          {
+            "node": "Confirmar reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack revise": {
+      "main": [
+        [
+          {
+            "node": "Marcar pending_revision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar pending_revision": {
+      "main": [
+        [
+          {
+            "node": "Set pending revision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set pending revision": {
+      "main": [
+        [
+          {
+            "node": "Pedir ajuste",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar prompt revisão": {
+      "main": [
+        [
+          {
+            "node": "Gemini revisão",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini revisão": {
+      "main": [
+        [
+          {
+            "node": "Parse revisão",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse revisão": {
+      "main": [
+        [
+          {
+            "node": "Salvar revisão",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar revisão": {
+      "main": [
+        [
+          {
+            "node": "Clear pending after rev",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear pending after rev": {
+      "main": [
+        [
+          {
+            "node": "Preparar Telegram revisão",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Telegram revisão": {
+      "main": [
+        [
+          {
+            "node": "Enviar revisão",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ack approve": {
+      "main": [
+        [
+          {
+            "node": "Guardar contexto approve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar contexto approve": {
+      "main": [
+        [
+          {
+            "node": "Gerar carrossel PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar carrossel PDF": {
+      "main": [
+        [
+          {
+            "node": "Preview PDF Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preview PDF Telegram": {
+      "main": [
+        [
+          {
+            "node": "Preparar LinkedIn init",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar LinkedIn init": {
+      "main": [
+        [
+          {
+            "node": "LinkedIn init upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LinkedIn init upload": {
+      "main": [
+        [
+          {
+            "node": "Preparar LinkedIn post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar LinkedIn post": {
+      "main": [
+        [
+          {
+            "node": "LinkedIn upload PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LinkedIn upload PDF": {
+      "main": [
+        [
+          {
+            "node": "LinkedIn criar post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LinkedIn criar post": {
+      "main": [
+        [
+          {
+            "node": "Marcar published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Marcar published": {
+      "main": [
+        [
+          {
+            "node": "Clear pending approve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear pending approve": {
+      "main": [
+        [
+          {
+            "node": "Confirmar publicação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

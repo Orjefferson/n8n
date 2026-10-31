@@ -1,0 +1,401 @@
+{
+  "id": "wf01producerlinkedin",
+  "name": "01 Producer RSS → Draft LinkedIn",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "p01-cron",
+      "name": "Cron diário 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const feeds = [\n  {\n    source: \"Lenny's Newsletter\",\n    focus: 'estratégia, growth e métricas de produto',\n    url: 'https://www.lennysnewsletter.com/feed',\n  },\n  {\n    source: 'SVPG',\n    focus: 'cultura, liderança e práticas de produto',\n    url: 'https://www.svpg.com/feed/',\n  },\n  {\n    source: 'Roman Pichler',\n    focus: 'agile, roadmaps e backlogs de produto',\n    url: 'https://www.romanpichler.com/feed/',\n  },\n  {\n    source: 'Product Coalition',\n    focus: 'artigos da comunidade de product management',\n    url: 'https://www.productcoalition.com/feed',\n  },\n  {\n    source: 'The Product Compass',\n    focus: 'estratégias práticas, frameworks e produtos de IA',\n    url: 'https://www.productcompass.pm/feed',\n  },\n  {\n    source: 'Reddit r/ProductManagement',\n    focus: 'discussões, carreira e bastidores de PMs',\n    url: 'https://www.reddit.com/r/ProductManagement/.rss',\n  },\n  {\n    source: 'Hacker News',\n    focus: 'engenharia, startups e discussões técnicas',\n    url: 'https://hnrss.org/frontpage',\n  },\n  {\n    source: 'CSS-Tricks',\n    focus: 'frontend, CSS e práticas de desenvolvimento web',\n    url: 'https://css-tricks.com/feed/',\n  },\n  {\n    source: 'DEV.to',\n    focus: 'programação, carreira em tech e tutoriais',\n    url: 'https://dev.to/feed',\n  },\n];\n\nreturn feeds.map((feed) => ({ json: feed }));\n"
+      },
+      "id": "p01-feeds",
+      "name": "Lista de feeds",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; n8n-linkedin-agent/1.0)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/rss+xml, application/atom+xml, application/xml, text/xml"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text",
+              "outputPropertyName": "xml"
+            }
+          }
+        }
+      },
+      "id": "p01-fetch",
+      "name": "Buscar feeds",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        520,
+        300
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const WINDOW_DAYS = 21;\nconst DEFAULT_LIMIT = 2;\nconst LIMITS = {\n  'Reddit r/ProductManagement': 5,\n  'Hacker News': 3,\n  'DEV.to': 3,\n};\n\nfunction decode(value) {\n  return String(value ?? '')\n    .replace(/<!\\[CDATA\\[([\\s\\S]*?)\\]\\]>/g, '$1')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;|&apos;/g, \"'\")\n    .replace(/&#(\\d+);/g, (_, code) => String.fromCharCode(Number(code)))\n    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));\n}\n\nfunction stripHtml(value) {\n  return decode(value).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\n}\n\nfunction textTag(block, names) {\n  for (const name of names) {\n    const match = block.match(new RegExp('<' + name + '(?:\\\\s[^>]*)?>([\\\\s\\\\S]*?)</' + name + '>', 'i'));\n    if (match && stripHtml(match[1])) return stripHtml(match[1]);\n  }\n  return '';\n}\n\nfunction atomLink(block) {\n  const tags = block.match(/<link\\b[^>]*>/gi) || [];\n  let fallback = '';\n  for (const tag of tags) {\n    const href = (tag.match(/href=[\"']([^\"']+)[\"']/i) || [])[1] || '';\n    const rel = (tag.match(/rel=[\"']([^\"']+)[\"']/i) || [])[1] || 'alternate';\n    if (!href) continue;\n    if (rel === 'alternate') return decode(href);\n    if (!fallback) fallback = decode(href);\n  }\n  return fallback;\n}\n\nfunction blocksOf(xml) {\n  const marker = /<entry[\\s>]/i.test(xml) && !/<item[\\s>]/i.test(xml) ? 'entry' : 'item';\n  return xml\n    .split(new RegExp('<' + marker + '[\\\\s>]', 'i'))\n    .slice(1)\n    .map((part) => part.split(new RegExp('</' + marker + '>', 'i'))[0]);\n}\n\nfunction feedFor(item, index) {\n  if (item.json?.source && item.json?.url && !item.json?.xml) return item.json;\n  const feeds = $('Lista de feeds').all();\n  const paired = item.pairedItem;\n  const pairedIndex = Array.isArray(paired) ? paired[0]?.item : paired?.item;\n  return feeds[pairedIndex ?? index]?.json ?? { source: 'Fonte desconhecida', focus: '', url: '' };\n}\n\nconst staticData = $getWorkflowStaticData('global');\nconst sent = new Set(staticData.sentLinks || []);\nconst cutoff = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;\nconst grouped = new Map();\n\nfor (const [index, item] of $input.all().entries()) {\n  const feed = feedFor(item, index);\n  const xml = typeof item.json?.xml === 'string' ? item.json.xml : '';\n  if (!xml.includes('<item') && !xml.includes('<entry')) continue;\n\n  const articles = blocksOf(xml)\n    .map((block) => {\n      const rawDate = textTag(block, ['pubDate', 'published', 'updated', 'dc:date']);\n      const timestamp = Date.parse(rawDate);\n      return {\n        source: feed.source,\n        focus: feed.focus,\n        title: textTag(block, ['title']),\n        link: textTag(block, ['link']) || atomLink(block),\n        pubDate: rawDate,\n        timestamp: Number.isNaN(timestamp) ? null : timestamp,\n        excerpt: textTag(block, ['description', 'summary', 'content', 'content:encoded']).slice(0, 500),\n      };\n    })\n    .filter((article) => article.title && article.link && article.timestamp && article.timestamp >= cutoff && !sent.has(article.link))\n    .sort((left, right) => right.timestamp - left.timestamp);\n\n  const limit = LIMITS[feed.source] || DEFAULT_LIMIT;\n  grouped.set(feed.source, articles.slice(0, limit));\n}\n\nconst selected = [...grouped.values()].flat().sort((left, right) => right.timestamp - left.timestamp);\n\nif (selected.length === 0) {\n  return [{\n    json: {\n      hasNews: false,\n      count: 0,\n      links: [],\n      message: 'Agente LinkedIn\\n\\nNão há artigos novos nos últimos 21 dias nas fontes acompanhadas.',\n    },\n  }];\n}\n\nconst prompt = [\n  'Gera um post LinkedIn + carrossel a partir destes artigos.',\n  '',\n  selected.map((article, index) => [\n    (index + 1) + '. ' + article.source,\n    'Foco da fonte: ' + article.focus,\n    'Título: ' + article.title,\n    'Data: ' + article.pubDate,\n    'Link: ' + article.link,\n    article.excerpt ? 'Excerto: ' + article.excerpt : '',\n  ].filter(Boolean).join('\\n')).join('\\n\\n'),\n].join('\\n');\n\nreturn [{\n  json: {\n    hasNews: true,\n    count: selected.length,\n    links: selected.map((article) => article.link),\n    prompt,\n  },\n}];\n"
+      },
+      "id": "p01-select",
+      "name": "Seleccionar notícias",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "p01-cond-news",
+              "leftValue": "={{ $json.hasNews }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "p01-if",
+      "name": "Há notícias novas",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1040,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-goog-api-key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  systemInstruction: { parts: [{ text: \"És um ghostwriter de LinkedIn para Product Managers e Tech Leads no Brasil. Tom: direto, concreto, storytelling curto. Zero hype vazio, zero emojis excessivos, sem markdown. Usa apenas factos presentes nos artigos. Português do Brasil. Hook na 1ª linha. Hashtags 3–5. Carrossel 5–8 slides (slide 1 = capa/hook; último = CTA + fontes). footer de cada slide no formato n/total (ex.: 1/6). Responde SOMENTE com JSON válido: {\\\"hook\\\":\\\"...\\\",\\\"post_text\\\":\\\"...\\\",\\\"hashtags\\\":[\\\"#...\\\"],\\\"carousel_slides\\\":[{\\\"title\\\":\\\"...\\\",\\\"body\\\":\\\"...\\\",\\\"footer\\\":\\\"1/6\\\"}],\\\"sources\\\":[{\\\"title\\\":\\\"...\\\",\\\"url\\\":\\\"...\\\"}]}\" }] },\n  contents: [{ role: 'user', parts: [{ text: $json.prompt }] }],\n  generationConfig: {\n    temperature: 0.5,\n    maxOutputTokens: 8192,\n    responseMimeType: 'application/json'\n  }\n}) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "p01-gemini",
+      "name": "Gerar post LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1300,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const response = $input.first().json;\nconst source = $('Seleccionar notícias').first().json;\n\nif (response?.promptFeedback?.blockReason) {\n  throw new Error('Pedido bloqueado pelo Gemini: ' + response.promptFeedback.blockReason);\n}\n\nconst parts = response?.candidates?.[0]?.content?.parts ?? [];\nconst text = parts.map((part) => part.text || '').join('').trim();\nif (!text) {\n  const finishReason = response?.candidates?.[0]?.finishReason || 'sem conteúdo';\n  throw new Error('Resposta vazia do Gemini (' + finishReason + ').');\n}\n\nlet parsed;\ntry {\n  const fence = String.fromCharCode(96, 96, 96);\n  const cleaned = text\n    .replace(new RegExp('^' + fence + 'json\\\\\\\\s*', 'i'), '')\n    .replace(new RegExp('^' + fence + '\\\\\\\\s*', 'i'), '')\n    .replace(new RegExp('\\\\\\\\s*' + fence + '$', 'i'), '')\n    .trim();\n  parsed = JSON.parse(cleaned);\n} catch (error) {\n  throw new Error('Gemini não devolveu JSON válido: ' + error.message);\n}\n\nconst slides = Array.isArray(parsed.carousel_slides) ? parsed.carousel_slides.slice(0, 8) : [];\nif (!parsed.post_text || slides.length < 3) {\n  throw new Error('JSON incompleto: post_text e pelo menos 3 slides são obrigatórios.');\n}\n\nconst draftId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);\nconst hashtags = Array.isArray(parsed.hashtags) ? parsed.hashtags : [];\nlet postText = String(parsed.post_text).trim();\nif (hashtags.length && !hashtags.some((tag) => postText.includes(tag))) {\n  postText = postText + '\\n\\n' + hashtags.join(' ');\n}\n\nreturn [{\n  json: {\n    draftId,\n    status: 'pending',\n    revisionCount: 0,\n    links: source.links || [],\n    count: source.count,\n    hook: parsed.hook || '',\n    post_text: postText,\n    hashtags,\n    carousel_slides: slides,\n    sources: Array.isArray(parsed.sources) ? parsed.sources : [],\n  },\n}];\n"
+      },
+      "id": "p01-parse",
+      "name": "Parse draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.CAROUSEL_URL || 'http://carousel:3000') + '/drafts' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "p01-save",
+      "name": "Salvar draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1820,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const draft = $('Parse draft').first().json;\nconst save = $input.first().json;\nconst draftId = save.draftId || draft.draftId;\n\nlet message = '📝 Rascunho LinkedIn (' + draftId + ')\\n\\n' + draft.post_text;\nconst limit = 3900;\nif (message.length > limit) {\n  message = message.slice(0, limit - 16) + '\\n\\n[truncado]';\n}\n\nreturn [{\n  json: {\n    draftId,\n    message,\n    reply_markup: {\n      inline_keyboard: [[\n        { text: '✅ Aprovar', callback_data: 'approve:' + draftId },\n        { text: '❌ Rejeitar', callback_data: 'reject:' + draftId },\n        { text: '✏️ Ajustar', callback_data: 'revise:' + draftId },\n      ]],\n    },\n  },\n}];\n"
+      },
+      "id": "p01-prep-tg",
+      "name": "Preparar Telegram",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const source = $input.first().json;\nreturn [{\n  json: {\n    message: source.message,\n    reply_markup: undefined,\n    skipKeyboard: true,\n  },\n}];\n"
+      },
+      "id": "p01-nonews",
+      "name": "Preparar sem novidades",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.telegram.org/bot' + $env.TELEGRAM_BOT_TOKEN + '/sendMessage' }}",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  chat_id: $env.TELEGRAM_CHAT_ID,\n  text: $json.message,\n  disable_web_page_preview: true,\n  ...( $json.reply_markup ? { reply_markup: $json.reply_markup } : {} )\n}) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "p01-send",
+      "name": "Enviar no Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nconst links = $('Seleccionar notícias').first().json.links || [];\nconst sent = new Set(staticData.sentLinks || []);\nfor (const link of links) sent.add(link);\nstaticData.sentLinks = [...sent].slice(-500);\nreturn [{ json: { registered: links.length } }];\n"
+      },
+      "id": "p01-reg",
+      "name": "Registar enviados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2600,
+        300
+      ],
+      "notes": "Guarda links já enviados. Rejeição no Approver não devolve o artigo."
+    }
+  ],
+  "connections": {
+    "Cron diário 08:00": {
+      "main": [
+        [
+          {
+            "node": "Lista de feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lista de feeds": {
+      "main": [
+        [
+          {
+            "node": "Buscar feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar feeds": {
+      "main": [
+        [
+          {
+            "node": "Seleccionar notícias",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seleccionar notícias": {
+      "main": [
+        [
+          {
+            "node": "Há notícias novas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Há notícias novas": {
+      "main": [
+        [
+          {
+            "node": "Gerar post LinkedIn",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Preparar sem novidades",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar post LinkedIn": {
+      "main": [
+        [
+          {
+            "node": "Parse draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse draft": {
+      "main": [
+        [
+          {
+            "node": "Salvar draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar draft": {
+      "main": [
+        [
+          {
+            "node": "Preparar Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Telegram": {
+      "main": [
+        [
+          {
+            "node": "Enviar no Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar sem novidades": {
+      "main": [
+        [
+          {
+            "node": "Enviar no Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar no Telegram": {
+      "main": [
+        [
+          {
+            "node": "Registar enviados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

@@ -1,0 +1,6 @@
+.env
+carousel/node_modules/
+carousel/data/
+carousel/package-lock.json
+*.pdf
+.DS_Store

@@ -1,0 +1,1 @@
+Referência visual do carrossel (1080×1350). O serviço `carousel` gera o PDF em runtime com `pdf-lib` usando as mesmas cores/estrutura; estes ficheiros HTML/CSS documentam o look desejado caso migres para HTML→imagem no futuro.

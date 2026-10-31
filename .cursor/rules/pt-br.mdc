@@ -1,0 +1,12 @@
+---
+description: Idioma e repositório deste projeto
+alwaysApply: true
+---
+
+# Português (Brasil) e repositório
+
+- Responda sempre em português do Brasil.
+- Textos para pessoas (documentação, prompts, mensagens de commit, interface e comentários voltados ao usuário) ficam em pt-BR.
+- Identificadores de código, nomes de variáveis e comandos permanecem em inglês.
+- Repositório canônico: https://github.com/Orjefferson/n8n (`origin`, branch `main`).
+- Nunca commite segredos. O `.env` fica só na máquina local; use `.env.example` como modelo.

@@ -1,0 +1,100 @@
+:root {
+  --bg: #0b1220;
+  --surface: #121a2b;
+  --accent: #3b82f6;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --border: rgba(148, 163, 184, 0.25);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 1080px;
+  height: 1350px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+}
+
+.slide {
+  width: 1080px;
+  height: 1350px;
+  padding: 72px 64px 64px;
+  display: flex;
+  flex-direction: column;
+  background:
+    radial-gradient(ellipse 80% 50% at 100% 0%, rgba(59, 130, 246, 0.22), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 0% 100%, rgba(14, 165, 233, 0.12), transparent 50%),
+    linear-gradient(165deg, var(--bg) 0%, var(--surface) 100%);
+  position: relative;
+}
+
+.slide::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 8px;
+  background: linear-gradient(90deg, var(--accent), #38bdf8);
+}
+
+.brand {
+  font-size: 22px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 48px;
+}
+
+.title {
+  font-size: 56px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  max-width: 920px;
+  margin-bottom: 36px;
+}
+
+.body {
+  font-size: 32px;
+  line-height: 1.45;
+  color: #e2e8f0;
+  max-width: 920px;
+  flex: 1;
+  white-space: pre-wrap;
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding-top: 28px;
+  margin-top: 40px;
+  font-size: 22px;
+  color: var(--muted);
+}
+
+.footer .accent {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.slide.cover .title {
+  font-size: 68px;
+  margin-top: 80px;
+}
+
+.slide.cover .body {
+  font-size: 34px;
+  color: var(--muted);
+}
